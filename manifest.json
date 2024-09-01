@@ -1,0 +1,20 @@
+{
+	"include": [
+		"$(MODDABLE)/examples/manifest_base.json",
+		"$(MODDABLE)/examples/manifest_net.json",
+		"$(MODDABLE)/examples/manifest_typings.json",
+		"./httpclient/manifest_httpclient.json",
+		"./tlssocket/manifest.json",
+		"$(MODDABLE)/modules/crypt/tls_419.json",
+		"$(MODDABLE)/modules/data/text/decoder/manifest.json",
+		"$(MODDABLE)/modules/data/text/encoder/manifest.json"
+	],
+	"modules": {
+		"*": ["./nats", "./main"]
+	},
+	"data": { 
+		"*": [
+			"$(MODULES)/crypt/data/ca233"
+		]
+	}
+}

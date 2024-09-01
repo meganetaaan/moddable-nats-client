@@ -1,0 +1,9 @@
+{
+	"include": [
+		"$(MODDABLE)/modules/crypt/tls_419.json"
+	],
+	"modules": {
+		"embedded:io/socket/tcp/tls": "./tlssocket"
+	},
+	"preload": "embedded:io/socket/tcp/tls"
+}
