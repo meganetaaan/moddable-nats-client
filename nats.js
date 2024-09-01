@@ -4,7 +4,7 @@ import TextDecoder from "text/decoder";
 import TextEncoder from "text/encoder";
 
 export class NATS {
-	#pendingWrite = null; // 初期の書き込みバッファ
+	#pendingWrite = null;
 	#writePosition = 0;
 	#bufferSize = 1024;
 	#writable = false;
@@ -71,11 +71,9 @@ export class NATS {
 		const remainingSpace = this.#bufferSize - this.#writePosition;
 
 		if (buffer.byteLength > remainingSpace) {
-			// バッファが足りない場合はサイズを拡張
 			this.#expandBuffer(buffer.byteLength - remainingSpace);
 		}
 
-		// バッファにデータを追加
 		this.#pendingWrite.set(buffer, this.#writePosition);
 		this.#writePosition += buffer.byteLength;
 
@@ -88,7 +86,6 @@ export class NATS {
 		const newSize = this.#bufferSize + additionalLength;
 		const newBuffer = new Uint8Array(newSize);
 
-		// 現在のデータを新しいバッファにコピー
 		newBuffer.set(this.#pendingWrite.subarray(0, this.#writePosition), 0);
 
 		this.#pendingWrite = newBuffer;
@@ -102,7 +99,6 @@ export class NATS {
 		if (toWrite > 0) {
 			this.client.write(this.#pendingWrite.subarray(0, toWrite));
 
-			// 書き込んだ分をバッファから削除
 			this.#pendingWrite.copyWithin(0, toWrite, this.#writePosition);
 			this.#writePosition -= toWrite;
 			this.#writable = false;
