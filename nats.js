@@ -4,6 +4,9 @@ import TextDecoder from "text/decoder";
 import TextEncoder from "text/encoder";
 
 export class NATS {
+	#pendingWrite = null; // 初期の書き込みバッファ
+	#writePosition = 0;
+	#bufferSize = 1024;
 	constructor(
 		address,
 		port = NATS.DEFAULT_HTTPS_PORT,
@@ -26,6 +29,11 @@ export class NATS {
 		this.encoder = new TextEncoder();
 		this.decoder = new TextDecoder();
 
+		// 初期バッファサイズを設定
+		this.#bufferSize = 1024; // 1KBの初期バッファを確保
+		this.#pendingWrite = new Uint8Array(this.#bufferSize);
+		this.#writePosition = 0;
+
 		if (isSecure) {
 			this.client = new TLSSocket({
 				address: this.address,
@@ -34,7 +42,7 @@ export class NATS {
 					ca: caCert, // CA証明書をここに渡す
 					protocolVersion: 0x303, // TLS 1.2
 				},
-				onWritable: () => this.onWriable(),
+				onWritable: (count) => this.#onWritable(count),
 				onReadable: () => this.recv(),
 				onError: () => this.handleError(),
 				onClose: () => this.handleDisconnect(),
@@ -43,6 +51,7 @@ export class NATS {
 			this.client = new TCP({
 				address: this.address,
 				port: this.port,
+				onWritable: (count) => this.#onWritable(count),
 				onReadable: () => this.recv(),
 				onError: () => this.handleError(),
 				onClose: () => this.handleDisconnect(),
@@ -50,15 +59,42 @@ export class NATS {
 		}
 	}
 
-	onWriable() {
-		trace("wriable\n")
-		if (!this.connected) {
-			this.sendConnect();
-		}
-	}
 
 	send(msg) {
-		this.client.write(this.encoder.encode(`${msg}\r\n`));
+		const buffer = this.encoder.encode(`${msg}\r\n`);
+		const remainingSpace = this.#bufferSize - this.#writePosition;
+
+		if (buffer.byteLength > remainingSpace) {
+			// バッファが足りない場合はサイズを拡張
+			this.#expandBuffer(buffer.byteLength - remainingSpace);
+		}
+
+		// バッファにデータを追加
+		this.#pendingWrite.set(buffer, this.#writePosition);
+		this.#writePosition += buffer.byteLength;
+	}
+
+	#expandBuffer(additionalLength) {
+		const newSize = this.#bufferSize + additionalLength;
+		const newBuffer = new Uint8Array(newSize);
+
+		// 現在のデータを新しいバッファにコピー
+		newBuffer.set(this.#pendingWrite.subarray(0, this.#writePosition), 0);
+
+		this.#pendingWrite = newBuffer;
+		this.#bufferSize = newSize;
+	}
+
+	#onWritable(count) {
+		const toWrite = Math.min(this.#writePosition, count);
+
+		if (toWrite > 0) {
+			this.client.write(this.#pendingWrite.subarray(0, toWrite));
+
+			// 書き込んだ分をバッファから削除
+			this.#pendingWrite.copyWithin(0, toWrite, this.#writePosition);
+			this.#writePosition -= toWrite;
+		}
 	}
 
 	sendConnect() {
@@ -75,9 +111,8 @@ export class NATS {
 
 	recv() {
 		trace("recv\n");
-		// const message = this.client.read()?.toString();
 		const buffer = this.client.read();
-		const message = this.decoder.decode(buffer)
+		const message = this.decoder.decode(buffer);
 		if (message) {
 			this.handleMessage(message);
 		}
