@@ -7,14 +7,19 @@ export class NATS {
 	#pendingWrite = null; // 初期の書き込みバッファ
 	#writePosition = 0;
 	#bufferSize = 1024;
-	constructor(
+	#writable = false;
+	#writableCount = 0;
+	constructor({
 		address,
-		port = NATS.DEFAULT_HTTPS_PORT,
+		port = NATS.DEFAULT_HTTP_PORT,
+		useTLS = false,
+		caCert = null,
 		user = null,
 		pass = null,
-		isSecure = true,
-		caCert = null,
-	) {
+		onConnect,
+		onDisconnect,
+		onError,
+	}) {
 		this.address = address;
 		this.port = port;
 		this.user = user;
@@ -22,10 +27,11 @@ export class NATS {
 		this.subs = new Map();
 		this.outstandingPings = 0;
 		this.connected = false;
-		this.isSecure = isSecure;
-		this.onConnect = null;
-		this.onDisconnect = null;
-		this.onError = null;
+		this.useTLS = useTLS;
+
+		this.onConnect = onConnect;
+		this.onDisconnect = onDisconnect;
+		this.onError = onError;
 		this.encoder = new TextEncoder();
 		this.decoder = new TextDecoder();
 
@@ -34,7 +40,7 @@ export class NATS {
 		this.#pendingWrite = new Uint8Array(this.#bufferSize);
 		this.#writePosition = 0;
 
-		if (isSecure) {
+		if (useTLS) {
 			this.client = new TLSSocket({
 				address: this.address,
 				port: this.port,
@@ -59,8 +65,8 @@ export class NATS {
 		}
 	}
 
-
 	send(msg) {
+		// trace(`sending: ${msg}\n`);
 		const buffer = this.encoder.encode(`${msg}\r\n`);
 		const remainingSpace = this.#bufferSize - this.#writePosition;
 
@@ -72,6 +78,10 @@ export class NATS {
 		// バッファにデータを追加
 		this.#pendingWrite.set(buffer, this.#writePosition);
 		this.#writePosition += buffer.byteLength;
+
+		if (this.#writable) {
+			this.#onWritable();
+		}
 	}
 
 	#expandBuffer(additionalLength) {
@@ -85,8 +95,9 @@ export class NATS {
 		this.#bufferSize = newSize;
 	}
 
-	#onWritable(count) {
+	#onWritable(count = this.#writableCount) {
 		const toWrite = Math.min(this.#writePosition, count);
+		// trace(`writable: ${count}, toWrite: ${toWrite}\n`);
 
 		if (toWrite > 0) {
 			this.client.write(this.#pendingWrite.subarray(0, toWrite));
@@ -94,6 +105,10 @@ export class NATS {
 			// 書き込んだ分をバッファから削除
 			this.#pendingWrite.copyWithin(0, toWrite, this.#writePosition);
 			this.#writePosition -= toWrite;
+			this.#writable = false;
+		} else {
+			this.#writable = true;
+			this.#writableCount = count;
 		}
 	}
 
@@ -110,7 +125,7 @@ export class NATS {
 	}
 
 	recv() {
-		trace("recv\n");
+		// trace("recv\n");
 		const buffer = this.client.read();
 		const message = this.decoder.decode(buffer);
 		if (message) {
@@ -119,11 +134,13 @@ export class NATS {
 	}
 
 	handleMessage(message) {
-		trace(`handleMessage: ${message}`);
+		// trace(`handleMessage: ${message}`);
 		const lines = message.split("\r\n");
-		for (const line of lines) {
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
 			if (line.startsWith(NATS.CTRL_MSG)) {
-				this.handleMsg(line);
+				i += 1;
+				this.handleMsg(line, lines[i]);
 			} else if (line.startsWith(NATS.CTRL_PING)) {
 				this.send(NATS.CTRL_PONG);
 			} else if (line.startsWith(NATS.CTRL_PONG)) {
@@ -139,12 +156,12 @@ export class NATS {
 		}
 	}
 
-	handleMsg(line) {
+	handleMsg(line, msg) {
 		const parts = line.split(" ");
 		const sid = Number.parseInt(parts[2], 10);
 		const callback = this.subs.get(sid);
 		if (callback) {
-			const payload = parts.slice(4).join(" ");
+			const payload = parts.slice(4).join(" ") + msg;
 			callback({
 				subject: parts[1],
 				sid,
@@ -179,8 +196,9 @@ export class NATS {
 	}
 
 	publish(subject, msg) {
+		const msgStr = JSON.stringify(msg);
 		if (!this.connected) return;
-		this.send(`PUB ${subject} ${msg.length}\r\n${msg}`);
+		this.send(`PUB ${subject} ${msgStr.length}\r\n${msgStr}`);
 	}
 
 	subscribe(subject, callback) {
